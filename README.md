@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    <h1 align="center">Stimulheat - Hardware</h1>
+    <h1 align="center">Stimulheat - Unity Scenes</h1>
 </p>
 
 The **Stimulheat - Unity Scenes** project contains all the VR scenes which can be used to test the device. It was developed using Unity VR.
