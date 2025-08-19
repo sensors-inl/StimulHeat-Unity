@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "displayName": "StimulHeat",
   "description": "Provides the libraries and API needed to connect the StimulHeat BLE device to Unity projects. It includes a desktop demo that demonstrates how to establish connections and interact with the device.",
+  "samples": [
+        {
+            "displayName": "Demo",
+            "description": "Contains a desktop demo scene to connect and interact with StimulHeat devices.",
+            "path": "Samples~/Demo"
+        }
   "documentationUrl": "",
   "changelogUrl": "",
   "licensesUrl": "",
