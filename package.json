@@ -1,0 +1,13 @@
+{
+  "name": "fr.renforce.stimulheat",
+  "version": "0.0.1",
+  "displayName": "StimulHeat",
+  "description": "Provides the libraries and API needed to connect the StimulHeat BLE device to Unity projects. It includes a desktop demo that demonstrates how to establish connections and interact with the device.",
+  "documentationUrl": "",
+  "changelogUrl": "",
+  "licensesUrl": "",
+  "author": {
+    "name": "Sophie Villenave",
+    "email": "sophie.villenave@liris.cnrs.fr"
+  }
+}
