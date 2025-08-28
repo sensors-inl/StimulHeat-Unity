@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+option csharp_namespace = "Stimulheat.Bluetooth";
+
 enum EnslavementType {
   HEAT = 0;
   TEMP = 1;

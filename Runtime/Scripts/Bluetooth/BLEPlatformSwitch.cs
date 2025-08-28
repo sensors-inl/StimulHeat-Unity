@@ -1,3 +1,4 @@
+using Stimulheat.Bluetooth;
 using UnityEngine;
 
 public class BLEPlatformSwitch : MonoBehaviour
