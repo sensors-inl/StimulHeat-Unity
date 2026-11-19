@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Google.Protobuf;
 using Stimulheat.Bluetooth;
+using Lirisxr.BleBridge;
 
 [Serializable]
 public class StimulHeatDevice
@@ -11,7 +12,7 @@ public class StimulHeatDevice
     public bool connected;
     public byte[] enslavementProtocolToSend;
     public byte[] commandProtocolToSend;
-    public BLE.BLEData receivedProtocol;
+    public BleDataPacket receivedProtocol;
     public MeasurementsResults measurementsResults;
     public float temperature;
 
@@ -22,12 +23,15 @@ public class StimulHeatDevice
 
     public void UpdateMeasurementResults()
     {
-        var zeroIndex = Array.IndexOf(receivedProtocol.buf, byte.MinValue);
+        if (receivedProtocol.buf == null || receivedProtocol.size <= 0) return;
+        var zeroIndex = Array.IndexOf(receivedProtocol.buf, byte.MinValue, 0, receivedProtocol.size);
+        if (zeroIndex <= 0) return; // incomplete frame (no COBS 0x00 delimiter yet)
         var message = receivedProtocol.buf[0..zeroIndex];
         var decoded = COBS.NET.COBS.Decode(message);
         try
         {
             var protocol = Protocol.Parser.ParseFrom(decoded);
+            if (protocol?.Stream?.MeasurementsResults == null) return;
             measurementsResults = protocol.Stream.MeasurementsResults;
             temperature = measurementsResults.TempIn / 100f;
         }

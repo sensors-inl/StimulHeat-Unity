@@ -1,18 +1,27 @@
 {
   "name": "fr.renforce.stimulheat",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "displayName": "StimulHeat",
-  "description": "Provides the libraries and API needed to connect the StimulHeat BLE device to Unity projects. It includes a desktop demo that demonstrates how to establish connections and interact with the device.",
+  "description": "Provides the API needed to connect the StimulHeat BLE device to Unity projects. BLE is wired through the shared com.lirisxr.blebridge package, so it can coexist with Nebula in the same project. Includes a desktop demo that demonstrates how to establish connections and interact with the device.",
+  "unity": "2022.3",
   "samples": [
-  {
-	  "displayName": "Demo",
-	  "description": "Contains a desktop demo scene to connect and interact with StimulHeat devices.",
-	  "path": "Samples~/Demo"
-	  }
+    {
+      "displayName": "Demo",
+      "description": "Contains a desktop demo scene to connect and interact with StimulHeat devices.",
+      "path": "Samples~/Demo"
+    },
+    {
+      "displayName": "VR Demo",
+      "description": "XR Interaction Toolkit scripts to send thermal stimuli to StimulHeat devices on grab/release. Requires com.unity.xr.interaction.toolkit installed in the project.",
+      "path": "Samples~/VR"
+    }
   ],
   "documentationUrl": "",
   "changelogUrl": "",
   "licensesUrl": "",
+  "dependencies": {
+    "com.lirisxr.blebridge": "0.1.0"
+  },
   "author": {
     "name": "Sophie Villenave",
     "email": "sophie.villenave@liris.cnrs.fr"

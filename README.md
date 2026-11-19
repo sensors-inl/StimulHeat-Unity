@@ -1,79 +1,88 @@
-<p align="center">
-    <img src="Readme~/stimulheat-logo.png" align="center" width="50%">
-</p>
+# StimulHeat (`fr.renforce.stimulheat`)
 
-<p align="center">
-    <h1 align="center">Stimulheat - Unity Package</h1>
-</p>
+Unity package to connect and command **StimulHeat** thermal devices (heat / heat-flow wristbands)
+over BLE. Includes a desktop demo and XR Interaction Toolkit VR samples that emit thermal
+stimuli on grab.
 
-This Unity package provides the libraries and API needed to connect the StimulHeat BLE device to Unity projects. It includes a Windows desktop demo that demonstrates how to establish connections and interact with the device.
+## Relation to the BLE Bridge
 
-⚠️ Note: Android support is currently in development.
+This package does **not** talk to BLE hardware itself. All BLE is wired through the shared
+**[`com.lirisxr.blebridge`](https://github.com/TardisOnMars/multisensory-ble-bridge)** package,
+which this package depends on (`com.lirisxr.blebridge` is declared in `package.json`, so UPM
+installs it automatically).
+
+How the two relate:
+
+- **The bridge owns the native stack.** `StimulHeatDevicesManagerWindows` requests an
+  `IBleLink` from the bridge's `BleConnectionManager` with a `BleDeviceProfile` (advertised
+  device name + service/characteristic UUIDs). Scanning, connecting, subscribing and writing
+  are all done by the bridge.
+- **No native DLL shipping.** StimulHeat ships no `BleWinrtDll.dll` and no Android jar, and
+  never calls the native `Quit()`. Before the bridge existed, StimulHeat and Nebula each bound
+  the same Windows BLE library and could not coexist in one project (duplicate DLL, and one
+  package's `Quit()` tore the other's connection down). The bridge is now the single owner, so
+  StimulHeat and Nebula can be used together.
+- **Automatic platform coverage.** Because the bridge picks its backend from the build target
+  (Windows/Editor: `BleWinrtDll`; Android: Velorexe), StimulHeat works on Windows and Android
+  unchanged — `BLEPlatformSwitch` is the same public command surface on both platforms.
+- **Shared scan.** The bridge runs one scan and routes devices by name + service UUID, so
+  StimulHeat devices are discovered alongside Nebula's without competing scanners.
+
+If you use this package, keep the bridge installed; see the bridge repo for platform setup
+(Android permissions manifest wizard, entry point, etc.).
 
 ## Installation
-You can install the package directly via Unity's Package Manager:
 
-1. Open your Unity project.
-2. Go to Window > Package Manager.
-3. Click the + button in the top-left.
-4. Select "Add package from git URL...".
-5. Paste the following repository URL and click Add. ```https://gitlab.com/BiomedicalSensors/renforce/stimulheat/stimulheat-unity-scenes```
+Unity 2022.3+. Add this package via the Unity Package Manager (git URL or local path). The BLE
+bridge dependency is pulled in automatically.
 
-The package will then appear in your Packages folder under StimulHeat.
+## Usage
 
-## Demo Scene
-A demo scene is included to help you quickly test the integration.
+`BLEPlatformSwitch` is the main component: add it to the scene with a child object assigned to
+`blePlatformWindows` (the child gets the device manager added at runtime). It exposes the
+command surface:
 
-### How to Run
-1. Navigate to `Packages/StimulHeat/Examples`
-2. Open StimulheatDemoScene
-3. Enter Play Mode in the Unity Editor
+```csharp
+// per-device commands
+blePlatformSwitch.SendTemperatureCommand(deviceId, 40f);   // target temperature (°C)
+blePlatformSwitch.SendHeatFlowCommand(deviceId, 1.5f);      // heat-flow intensity
+blePlatformSwitch.SendOffCommand(deviceId);                 // stop all outputs
 
-### Configure your devices
-1. Turn on your StimulHeat devices
-2. Add every the public name of your StimulHeat devices (e.g. 0F6C) by clicking on `+`
-3. You can remove a device by clicking on `-`
-4. When you have added every device, click on `Finish Configuration`
+// comfort presets applied to every connected device
+blePlatformSwitch.VeryHotThermalComfortCommand();
+blePlatformSwitch.VeryColdThermalComfortCommand();
+blePlatformSwitch.NeutralThermalComfortCommand();
+```
 
-### Control your devices
-1. Select the device you want to control by selecting the according tab
-2. Click on the Temp/Flux toggle to change the modality of control
-3. Use the slider to select the value
-4. Click on Send Command to control the StimulHeat
-5. Click on Turn Off if you wish to stop giving thermal control. Be aware that temperature readings are only available when the device is turned on. 
+Connected devices are listed in `StimulheatDevicesManager.Devices` (each a `StimulHeatDevice`
+with its `deviceId`).
 
-## Integrating StimulHeat in your own scenes
-The demo shows the minimal workflow to integrate StimulHeat into a Unity project:
+## Samples
 
-1. Navigate to `Packages/StimulHeat/Prefabs` and add the StimulHeat prefab to your scene. This handles BLE scanning, connecting, and communication.
+Import from the Package Manager ("Import samples" on StimulHeat):
 
-2. By default, the BLEPlatformSwitch component is disabled, as it needs a list of StimulHeat devices to work. The list in the StimulHeatDevicesManager must be filled before enabling BLEPlatformSwitch (from either a static file or a GUI, the demo scene uses a GUI).
+- **Demo** (`Samples~/Demo`) — `StimulHeatBleDemo.cs`, a desktop OnGUI demo for temperature /
+  heat-flux control via `BLEPlatformSwitch`. Works on Windows and Android unchanged.
+- **VR Demo** (`Samples~/VR`) — XR Interaction Toolkit scripts that send a thermal command on
+  grab and stop on release. Requires `com.unity.xr.interaction.toolkit`.
+  - `StimulHeatVRSettings` — scene component. Set the `Enslavement Type`, `Hands Used`
+    (Left/Right/Both), and the `Left/Right Device Name` (the BLE advertised names). On `Start`
+    it registers the devices with `StimulheatDevicesManager` and enables `BLEPlatformSwitch`.
+  - `SendThermalOnSelect` — put on each XR controller's interactor. `Hand Side` selects which
+    bound device receives the command. On `selectEntered` it scans the grabbed object for
+    `ThermalStimuli` components and sends `BLEPlatformSwitch.SendCommand(deviceId, value, type)`;
+    on `selectExited` it sends a stop (value 0, enabled false).
+  - `ThermalStimuli` — put on a grabbable interactable. `Thermal Value` + `Type` define what the
+    StimulHeat device emits while the object is held.
 
-3. Use BLEPlatformSwitch methods to control your StimulHeat devices.
+VR setup:
+1. Install `com.unity.xr.interaction.toolkit`.
+2. In the scene, add `BLEPlatformSwitch` (disabled) and `StimulHeatVRSettings` configured as above.
+3. On each XR controller interactor, add `SendThermalOnSelect` with the matching `Hand Side`.
+4. On each grabbable object that should emit heat, add a `ThermalStimuli` component.
+5. Run on Android (or Windows): the bridge connects to the devices named in the settings, and
+   grabbing a `ThermalStimuli` object fires the command on the bound hand's device.
 
-## License
+## Author
 
-This software source code is licensed under the terms of the GNU General Public License v3 (GPLv3).
-You are free to use, study, modify, and distribute it under the same license.
-SPDX-License-Identifier: [GPL-3.0-only](https://opensource.org/license/gpl-3-0)
-
-🔒 For commercial use without open hardware obligations, a separate commercial license may be available.
-For more details, see the [License](LICENSE.md) file.
-
----
-
-## Acknowledgments
-
-The main contributors to this project are Matthieu Mesnage and Bertrand Massot from INSA Lyon, CNRS, INL UMR 5270, Villeurbanne, France.
-
-The main developer of this Unity Package is Sophie Villenave, from Ecole Centrale de Lyon, CNRS, LIRIS UMR 5205, Saint-Etienne, France.
-
-This work was supported by the **French National Research Agency (ANR)** under grant **ANR-22-CE31-0023-03 RENFORCE**.
-
----
-
-## Contact
-
-[bertrand.massot@insa-lyon.fr](mailto:bertrand.massot@insa-lyon.fr)
-
----
+Sophie Villenave — sophie.villenave@liris.cnrs.fr (LIRIS / RENFORCE)

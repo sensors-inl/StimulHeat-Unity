@@ -2,305 +2,222 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
+using Lirisxr.BleBridge;
 
+/// <summary>
+/// Drives one or more StimulHeat devices over BLE.
+///
+/// This is the BleBridge-backed replacement for the original StimulHeatDevicesManagerWindows.
+/// It no longer imports BleWinrtDll or manages its own scan/connect/quit threads. Instead it
+/// requests one IBleLink per configured device from the shared BleConnectionManager
+/// (com.lirisxr.blebridge), which owns the single native BLE stack and lets StimulHeat and
+/// Nebula coexist in the same project without DLL or Quit() conflicts.
+///
+/// StimulHeat uses the Nordic UART-like service 6E400001:
+///   - 6E400003: notify (incoming measurements)
+///   - 6E400002: write  (outgoing COBS-encoded protobuf commands)
+/// </summary>
 public class StimulHeatDevicesManagerWindows : MonoBehaviour
 {
     public bool isScanning => _isScanning;
     public bool isConnected => _isConnected;
-    
-    private readonly string _serviceUuid = "{6E400001-B5A3-F393-E0A9-E50E24DCCA9E}";
-    private readonly string[] _readCharacteristicUuids = { "{6E400003-B5A3-F393-E0A9-E50E24DCCA9E}" };
-    private readonly string _writeCharacteristicUuid = "{6E400002-B5A3-F393-E0A9-E50E24DCCA9E}";
 
-    private BLE _ble;
-    private BLE.BLEScan _scan;
+    // Nordic UART-like service. Full 128-bit UUIDs; BleBridge matches them as substrings.
+    private const string ServiceUuid = "{6E400001-B5A3-F393-E0A9-E50E24DCCA9E}";
+    private const string NotifyCharacteristicUuid = "{6E400003-B5A3-F393-E0A9-E50E24DCCA9E}";
+    private const string WriteCharacteristicUuid = "{6E400002-B5A3-F393-E0A9-E50E24DCCA9E}";
 
-    private bool _isScanning, _isConnected, _isReading;
+    private readonly Dictionary<string, IBleLink> _links = new Dictionary<string, IBleLink>();
+    private readonly Dictionary<string, WriteState> _writeStates = new Dictionary<string, WriteState>();
+    private bool _isScanning, _isConnected;
+    private Thread _writingThread;
+    private volatile bool _running;
 
-    private IDictionary<string, string> _discoveredDevices = new Dictionary<string, string>();
-    private int _devicesCount;
+    // Per-device acknowledged-write state. The ack callback signals the write thread.
+    private const int MaxWriteRetries = 3;
+    private class WriteState
+    {
+        public readonly ManualResetEventSlim Done = new ManualResetEventSlim(false);
+        public bool AckResult;
+        public void Reset() { AckResult = false; Done.Reset(); }
+    }
 
-    private Thread _scanningThread, _connectionThread, _readingThread, _writingThread;
-    
+    private WriteState GetWriteState(string deviceName)
+    {
+        if (!_writeStates.TryGetValue(deviceName, out var s))
+        {
+            s = new WriteState();
+            _writeStates[deviceName] = s;
+        }
+        return s;
+    }
+
+    /// <summary>
+    /// Sends one packet with acknowledgment and retries on failure/timeout.
+    /// Returns true if the native stack acked the write within the retry budget.
+    /// </summary>
+    private bool SendAcked(IBleLink link, WriteState state, byte[] data)
+    {
+        for (int attempt = 0; attempt < MaxWriteRetries; attempt++)
+        {
+            state.Reset();
+            link.Write(data, ok =>
+            {
+                state.AckResult = ok;
+                state.Done.Set();
+            });
+            if (state.Done.Wait(2000))
+                return state.AckResult;
+            // Timed out waiting for ack -> retry.
+        }
+        return false;
+    }
 
     private void Start()
     {
-        _ble = new BLE();
-        _readingThread = new Thread(ReadBleData);
-        _writingThread = new Thread(WriteBleData);
         StartScanHandler();
-    }
-
-    private bool DevicesFound()
-    {
-        var found = true;
-        foreach (var device in StimulheatDevicesManager.Devices)
-        {
-            found = found && device.deviceId != null;
-        }
-        return found;
-    }
-
-    private bool DevicesConnected()
-    {
-        var connected = true;
-        foreach (var device in StimulheatDevicesManager.Devices)
-        {
-            connected = connected && device.connected;
-        }
-        return connected;
     }
 
     private void Update()
     {
-        if (_isScanning)
+        // Connection state is driven by the links; reflect it here for the UI/switch.
+        if (_links.Count == 0) return;
+        bool allConnected = true;
+        foreach (var device in StimulheatDevicesManager.Devices)
         {
-            if (_discoveredDevices.Count > _devicesCount)
+            if (!_links.TryGetValue(device.deviceName, out var link) || !link.IsConnected)
             {
-                _devicesCount = _discoveredDevices.Count;
+                allConnected = false;
+                break;
             }
         }
-
-        if (DevicesConnected())
+        if (allConnected && !_isConnected)
         {
-            // Device was found and is connected.
-            if (_ble.isConnected && !_isConnected)
+            _isConnected = true;
+            _isScanning = false;
+            if (!_running)
             {
-                _isConnected = true;
-                _isScanning = false;
+                _running = true;
+                _writingThread = new Thread(WriteBleData) { IsBackground = true, Name = "StimulHeatWrite" };
+                _writingThread.Start();
             }
         }
-
-        if (_isConnected && !_isReading)
-        {
-            StartReadingHandler();
-            _isReading = true;
-        }
     }
 
-    private void OnDestroy()
+    private void OnDestroy() => CleanUp();
+    private void OnApplicationQuit() => CleanUp();
+
+    /// <summary>Releases every link (ref-counted in BleBridge; the native stack is torn down only when no package is using it).</summary>
+    private void CleanUp()
     {
-        CleanThreads();
-    }
-
-    private void OnApplicationQuit()
-    {
-        CleanThreads();
-    }
-
-    // Prevent threading issues and free BLE stack.
-    private void CleanThreads()
-    {
-        try
+        _running = false;
+        try { _writingThread?.Join(500); } catch { }
+        foreach (var kvp in _links)
         {
-            _scan.Cancel();
-            _ble.Close();
+            try { kvp.Value.Dispose(); } catch { }
         }
-        catch (NullReferenceException e)
+        _links.Clear();
+        foreach (var kvp in _writeStates)
         {
-            Debug.Log("BLE object never initialized.\n" + e);
+            try { kvp.Value.Done.Dispose(); } catch { }
         }
-
-        try
-        {
-            _scanningThread.Abort();
-        }
-        catch (NullReferenceException e)
-        {
-            Debug.Log("Scanning Thread never initialized.\n" + e);
-        }
-
-        try
-        {
-            _connectionThread.Abort();
-        }
-        catch (NullReferenceException e)
-        {
-            Debug.Log("Connection Thread never initialized.\n" + e);
-        }
-
-        try
-        {
-            _readingThread.Abort();
-        }
-        catch (NullReferenceException e)
-        {
-            Debug.Log("Reading Thread never initialized.\n" + e);
-        }
-
-        try
-        {
-            _writingThread.Abort();
-        }
-        catch (NullReferenceException e)
-        {
-            Debug.Log("Writing Thread never initialized.\n" + e);
-        }
+        _writeStates.Clear();
+        _isConnected = false;
+        _isScanning = false;
     }
 
     public void StartScanHandler()
     {
-        _devicesCount = 0;
         _isScanning = true;
-        _discoveredDevices.Clear();
-        _scanningThread = new Thread(ScanBleDevices);
-        _scanningThread.Start();
+        _isConnected = false;
+
+        // Request one link per configured device. BleConnectionManager runs the single shared
+        // scan; each link's OnConnected fires once its device is discovered and subscribed.
+        foreach (var device in StimulheatDevicesManager.Devices)
+        {
+            if (string.IsNullOrEmpty(device.deviceName)) continue;
+            if (_links.ContainsKey(device.deviceName)) continue;
+
+            var profile = new BleDeviceProfile
+            {
+                deviceName = device.deviceName,
+                serviceUuid = ServiceUuid,
+                notifyCharacteristicUuids = new[] { NotifyCharacteristicUuid },
+                writeCharacteristicUuid = WriteCharacteristicUuid
+            };
+
+            var link = BleConnectionManager.Instance.RequestLink(profile);
+            link.OnConnected += l => OnLinkConnected(l, device);
+            link.OnDisconnected += l => OnLinkDisconnected(l, device);
+            link.OnDataReceived += (l, p) => OnLinkData(l, p, device);
+            _links[device.deviceName] = link;
+        }
     }
 
     public void ResetHandler()
     {
-        _discoveredDevices.Clear();
-
+        CleanUp();
         foreach (var device in StimulheatDevicesManager.Devices)
         {
             device.deviceId = "-1";
-        }
-
-        CleanThreads();
-    }
-
-    private void ReadBleData(object obj)
-    {
-        while (true)
-        {
-            Thread.Sleep(100);
-
-            var packageReceived = BLE.ReadPackage();
-
-            if (packageReceived.buf.Length == 0) break;
-
-            foreach (var device in StimulheatDevicesManager.Devices)
-            {
-                if (!packageReceived.deviceId.Equals(device.deviceId)) continue;
-                
-                device.receivedProtocol = packageReceived;
-                device.UpdateMeasurementResults();
-            }
+            device.connected = false;
         }
     }
 
-    private void WriteBleData(object obj)
+    // =========================================================
+    // Link events (fire on BleBridge's background thread)
+    // =========================================================
+    private void OnLinkConnected(IBleLink link, StimulHeatDevice device)
     {
-        while (true)
+        device.deviceId = link.DeviceId;
+        device.connected = true;
+        Debug.Log($"[StimulHeat] Connected: {device}");
+    }
+
+    private void OnLinkDisconnected(IBleLink link, StimulHeatDevice device)
+    {
+        device.connected = false;
+        _isConnected = false;
+        Debug.LogWarning($"[StimulHeat] Disconnected: {device}");
+    }
+
+    private void OnLinkData(IBleLink link, BleDataPacket packet, StimulHeatDevice device)
+    {
+        if (packet.size <= 0) return;
+        device.receivedProtocol = packet;
+        device.UpdateMeasurementResults();
+    }
+
+    // =========================================================
+    // Outgoing writes (acknowledged, own thread)
+    // =========================================================
+    // Each packet is sent once with an acknowledgment callback. On ack failure or timeout
+    // (no GATT write-complete within 2s) the packet is retried up to MaxWriteRetries times.
+    // Once acked, the packet is cleared so it is sent exactly once. This replaces the old
+    // blind continuous re-send hotfix: both backends (WinRT SendData(block=true) and Velorexe's
+    // onCharacteristicWrite) now confirm the write, so temperature-mode enslavement switching is
+    // delivered reliably without flooding the link.
+    private void WriteBleData()
+    {
+        while (_running)
         {
             Thread.Sleep(100);
-            
             foreach (var device in StimulheatDevicesManager.Devices)
             {
+                if (!_links.TryGetValue(device.deviceName, out var link) || !link.IsConnected) continue;
+                var state = GetWriteState(device.deviceName);
+
                 if (device.enslavementProtocolToSend != null)
                 {
-                    BLE.WritePackage(device.deviceId, _serviceUuid, _writeCharacteristicUuid, device.enslavementProtocolToSend);
+                    if (SendAcked(link, state, device.enslavementProtocolToSend))
+                        device.enslavementProtocolToSend = null;
                 }
-
                 if (device.commandProtocolToSend != null)
                 {
-                    BLE.WritePackage(device.deviceId, _serviceUuid, _writeCharacteristicUuid, device.commandProtocolToSend);
+                    if (SendAcked(link, state, device.commandProtocolToSend))
+                        device.commandProtocolToSend = null;
                 }
             }
         }
-    }
-
-    private void ScanBleDevices()
-    {
-        _scan = BLE.ScanDevices();
-        Debug.Log("BLE.ScanDevices() started.");
-
-        _scan.Found = (newDeviceId, newDeviceName) =>
-        {
-            try
-            {
-                _discoveredDevices.Add(newDeviceId, newDeviceName);
-                Debug.Log("Found device with name: " + newDeviceName);
-            }
-            catch (Exception e)
-            {
-                // ignored
-            }
-
-            foreach (var device in StimulheatDevicesManager.Devices)
-            {
-                if (device.deviceId == null && newDeviceName.Contains(device.deviceName))
-                {
-                    device.deviceId = newDeviceId;
-                }
-            }
-            
-        };
-
-        _scan.Finished = () =>
-        {
-            _isScanning = false;
-            
-            foreach (var device in StimulheatDevicesManager.Devices)
-            {
-                Debug.Log(device.ToString());
-            }
-
-            Debug.Log("Scan finished");
-        };
-
-        while (!DevicesFound()) Thread.Sleep(500);
-
-        _scan.Cancel();
-        _scanningThread = null;
-        _isScanning = false;
-
-        if (!DevicesFound())
-        {
-            foreach (var device in StimulheatDevicesManager.Devices)
-            {
-                if (device.deviceId == "-1") Debug.Log("Device Not Found ! " + device.ToString());
-            }
-        }
-        else
-        {
-            StartConHandler();
-        }
-    }
-
-    public void StartConHandler()
-    {
-        _connectionThread = new Thread(ConnectBleDevice);
-        _connectionThread.Start();
-    }
-
-    public void StartReadingHandler()
-    {
-        if (!_readingThread.IsAlive)
-        {
-            _readingThread = new Thread(ReadBleData);
-            _readingThread.Start();
-        }
-    }
-
-    public void StartWritingHandler()
-    {
-        if (!_writingThread.IsAlive)
-        {
-            _writingThread = new Thread(WriteBleData);
-            _writingThread.Start();
-        }
-    }
-
-    private void ConnectBleDevice()
-    {
-        foreach (var device in StimulheatDevicesManager.Devices)
-        {
-            try
-            {
-                _ble.Connect(device.deviceId, _serviceUuid, _readCharacteristicUuids);
-                device.connected = true;
-            }
-            catch (Exception e)
-            {
-                Debug.Log("Could not establish connection to device with ID " + device.deviceId + "\n" + e);
-            }
-        }
-
-        if (!DevicesConnected()) return;
-        Debug.Log("Every device connected successfully!");
-        
-        StartWritingHandler();
-        StartReadingHandler();
     }
 }

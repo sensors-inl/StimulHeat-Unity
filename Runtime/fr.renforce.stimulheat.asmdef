@@ -1,3 +1,20 @@
 {
-	"name": "stimulheat"
+    "name": "stimulheat",
+    "rootNamespace": "",
+    "references": [
+        "Lirisxr.BleBridge.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Google.Protobuf.dll",
+        "COBS.NET.dll",
+        "System.Runtime.CompilerServices.Unsafe.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
