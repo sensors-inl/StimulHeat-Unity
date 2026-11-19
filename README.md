@@ -7,7 +7,7 @@ stimuli on grab.
 ## Relation to the BLE Bridge
 
 This package does **not** talk to BLE hardware itself. All BLE is wired through the shared
-**[`com.lirisxr.blebridge`](https://github.com/TardisOnMars/multisensory-ble-bridge)** package,
+**[`com.lirisxr.blebridge`](https://github.com/liris-xr/multisensory-bridge)** package,
 which this package depends on (`com.lirisxr.blebridge` is declared in `package.json`, so UPM
 installs it automatically).
 
@@ -83,6 +83,7 @@ VR setup:
 5. Run on Android (or Windows): the bridge connects to the devices named in the settings, and
    grabbing a `ThermalStimuli` object fires the command on the bound hand's device.
 
-## Author
+## Contact
 
-Sophie Villenave — sophie.villenave@liris.cnrs.fr (LIRIS / RENFORCE)
+Bertrand Massot - bertrand.massot@insa-lyon.fr
+Sophie Villenave - sophie.villenave@ec-lyon.fr
