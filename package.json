@@ -20,7 +20,7 @@
   "changelogUrl": "",
   "licensesUrl": "",
   "dependencies": {
-    "com.lirisxr.blebridge": "0.1.0"
+    "com.lirisxr.blebridge": "https://github.com/liris-xr/multisensory-bridge.git"
   },
   "author": {
     "name": "Sophie Villenave",
